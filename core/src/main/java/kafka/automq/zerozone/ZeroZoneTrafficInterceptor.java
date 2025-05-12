@@ -19,6 +19,7 @@
 
 package kafka.automq.zerozone;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import kafka.automq.interceptor.ClientIdKey;
 import kafka.automq.interceptor.ClientIdMetadata;
 import kafka.automq.interceptor.ProduceRequestArgs;
@@ -36,6 +37,9 @@ import org.apache.kafka.common.record.MemoryRecords;
 import org.apache.kafka.common.requests.s3.AutomqZoneRouterResponse;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.common.zerozone.Position;
+import org.apache.kafka.common.zerozone.RemoteRecordsLocation;
+import org.apache.kafka.common.zerozone.RouterRecord;
 import org.apache.kafka.image.MetadataDelta;
 import org.apache.kafka.image.MetadataImage;
 import org.apache.kafka.image.loader.LoaderManifest;
@@ -56,6 +60,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+
+import static kafka.automq.zerozone.ZoneRouterPack.genObjectPath;
 
 public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataPublisher {
     private static final Logger LOGGER = LoggerFactory.getLogger(ZeroZoneTrafficInterceptor.class);
@@ -180,6 +186,22 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
                     new TopicPartition(topicData.name(), partitionData.index()),
                     (MemoryRecords) partitionData.records()
                 )));
+        return realEntriesPerPartition;
+    }
+
+    static Map<TopicPartition, MemoryRecords> produceRequestToMap(ProduceRequestData data, RouterRecord routerRecord, Map<Integer, Position> recordsPositionMap) {
+        Map<TopicPartition, MemoryRecords> realEntriesPerPartition = new HashMap<>();
+        AtomicInteger index = new AtomicInteger(0);
+        data.topicData().forEach(topicData ->
+            topicData.partitionData().forEach(partitionData -> {
+                MemoryRecords records = (MemoryRecords) partitionData.records();
+                Position recordsPosition = recordsPositionMap.get(index.getAndIncrement());
+                RemoteRecordsLocation location = new RemoteRecordsLocation(genObjectPath(routerRecord.nodeId(), routerRecord.objectId()),
+                    routerRecord.position().position(), routerRecord.position().size(), recordsPosition.position(), recordsPosition.size());
+                realEntriesPerPartition.put(
+                    new TopicPartition(topicData.name(), partitionData.index()),
+                    new MemoryRecords.MemoryRecordsExt(records.buffer(), location));
+            }));
         return realEntriesPerPartition;
     }
 

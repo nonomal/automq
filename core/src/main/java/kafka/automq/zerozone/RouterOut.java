@@ -46,6 +46,8 @@ import com.automq.stream.utils.Systems;
 import com.automq.stream.utils.ThreadUtils;
 import com.automq.stream.utils.Threads;
 
+import org.apache.kafka.common.zerozone.Position;
+import org.apache.kafka.common.zerozone.RouterRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -253,7 +255,7 @@ public class RouterOut {
 
     private CompletableFuture<Void> sendRouterRequest(Node destNode, long objectId, Position position,
         List<ProxyRequest> requests) {
-        RouterRecord routerRecord = new RouterRecord(currentNode.id(), objectStorage.bucketId(), objectId, position.position(), position.size());
+        RouterRecord routerRecord = new RouterRecord(currentNode.id(), objectStorage.bucketId(), objectId, position);
 
         AutomqZoneRouterRequest.Builder builder = new AutomqZoneRouterRequest.Builder(
             new AutomqZoneRouterRequestData().setMetadata(routerRecord.encode().array())

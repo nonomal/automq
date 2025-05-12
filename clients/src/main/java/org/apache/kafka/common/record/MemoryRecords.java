@@ -34,6 +34,7 @@ import org.apache.kafka.common.utils.CloseableIterator;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 
+import org.apache.kafka.common.zerozone.RemoteRecordsLocation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -842,4 +843,19 @@ public class MemoryRecords extends AbstractRecords {
             buffer.capacity()
         );
     }
+
+    // AutoMQ injection start
+    public static class MemoryRecordsExt extends MemoryRecords {
+        private final RemoteRecordsLocation location;
+
+        public MemoryRecordsExt(ByteBuffer buffer, RemoteRecordsLocation location) {
+            super(buffer);
+            this.location = location;
+        }
+
+        public RemoteRecordsLocation getLocation() {
+            return location;
+        }
+    }
+    // AutoMQ injection end
 }

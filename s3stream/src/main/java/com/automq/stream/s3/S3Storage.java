@@ -483,7 +483,7 @@ public class S3Storage implements Storage {
                 Lock lock = confirmOffsetCalculator.addLock();
                 lock.lock();
                 try {
-                    appendResult = deltaWAL.append(new TraceContext(context), streamRecord.encoded());
+                    appendResult = deltaWAL.append(new AppendContext(context), streamRecord.encoded());
                 } finally {
                     lock.unlock();
                 }

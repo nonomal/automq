@@ -19,19 +19,30 @@
 
 package kafka.automq.zerozone;
 
+import java.util.Map;
 import org.apache.kafka.common.message.ProduceRequestData;
 
 import java.util.Objects;
+import org.apache.kafka.common.zerozone.Position;
 
 public class ZoneRouterProduceRequest {
     private final short apiVersion;
     private final short flag;
     private final ProduceRequestData data;
+    private final Map<Integer, Position> recordsPositionMap;
 
     public ZoneRouterProduceRequest(short apiVersion, short flag, ProduceRequestData data) {
         this.apiVersion = apiVersion;
         this.data = data;
         this.flag = flag;
+        this.recordsPositionMap = null;
+    }
+
+    public ZoneRouterProduceRequest(short apiVersion, short flag, ProduceRequestData data, Map<Integer, Position> recordsPositionMap) {
+        this.apiVersion = apiVersion;
+        this.data = data;
+        this.flag = flag;
+        this.recordsPositionMap = recordsPositionMap;
     }
 
     public short apiVersion() {
@@ -44,6 +55,10 @@ public class ZoneRouterProduceRequest {
 
     public ProduceRequestData data() {
         return data;
+    }
+
+    public Map<Integer, Position> recordsPositionMap() {
+        return recordsPositionMap;
     }
 
     @Override

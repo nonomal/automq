@@ -19,6 +19,7 @@
 
 package com.automq.stream.s3.context;
 
+import com.automq.stream.api.AppendOptions;
 import com.automq.stream.s3.trace.context.TraceContext;
 
 import io.opentelemetry.api.trace.Tracer;
@@ -26,6 +27,8 @@ import io.opentelemetry.context.Context;
 
 public class AppendContext extends TraceContext {
     public static final AppendContext DEFAULT = new AppendContext();
+
+    private AppendOptions appendOptions = AppendOptions.DEFAULT;
 
     public AppendContext() {
         super(false, null, null);
@@ -35,7 +38,20 @@ public class AppendContext extends TraceContext {
         super(context);
     }
 
+    public AppendContext(AppendContext context) {
+        super(context);
+        this.appendOptions = context.appendOptions;
+    }
+
     public AppendContext(boolean isTraceEnabled, Tracer tracer, Context currentContext) {
         super(isTraceEnabled, tracer, currentContext);
+    }
+
+    public AppendOptions appendOptions() {
+        return appendOptions;
+    }
+
+    public void setAppendOptions(AppendOptions appendOptions) {
+        this.appendOptions = appendOptions;
     }
 }

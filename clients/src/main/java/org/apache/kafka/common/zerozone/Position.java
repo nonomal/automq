@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-package kafka.automq.zerozone;
+package org.apache.kafka.common.zerozone;
 
 public class Position {
     private final int position;

@@ -21,6 +21,7 @@ package com.automq.stream.s3.wal.impl.object;
 
 import com.automq.stream.ByteBufSeqAlloc;
 import com.automq.stream.s3.ByteBufAlloc;
+import com.automq.stream.s3.context.AppendContext;
 import com.automq.stream.s3.network.ThrottleStrategy;
 import com.automq.stream.s3.operator.ObjectStorage;
 import com.automq.stream.s3.trace.context.TraceContext;
@@ -98,7 +99,7 @@ public class ObjectWALService implements WriteAheadLog {
     }
 
     @Override
-    public AppendResult append(TraceContext context, ByteBuf data, int crc) throws OverCapacityException {
+    public AppendResult append(AppendContext context, ByteBuf data, int crc) throws OverCapacityException {
         ByteBuf header = BYTE_BUF_ALLOC.byteBuffer(RECORD_HEADER_SIZE);
         assert header.refCnt() == 1;
 
@@ -108,7 +109,7 @@ public class ObjectWALService implements WriteAheadLog {
 
             long expectedWriteOffset = accumulator.append(recordSize, start -> {
                 CompositeByteBuf recordByteBuf = ByteBufAlloc.compositeByteBuffer();
-                Record record = WALUtil.generateRecord(data, header, 0, start, true);
+                Record record = WALUtil.generateRecord(data, header, 0, start);
                 recordByteBuf.addComponents(true, record.header(), record.body());
                 return recordByteBuf;
             }, appendResultFuture);

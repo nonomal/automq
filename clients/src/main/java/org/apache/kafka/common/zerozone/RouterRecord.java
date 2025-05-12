@@ -17,25 +17,22 @@
  * limitations under the License.
  */
 
-package kafka.automq.zerozone;
+package org.apache.kafka.common.zerozone;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
+import java.nio.ByteBuffer;
 
 public class RouterRecord {
     private static final short MAGIC = 0x01;
     private final int nodeId;
     private final short bucketId;
     private final long objectId;
-    private final int position;
-    private final int size;
+    private final Position position;
 
-    public RouterRecord(int nodeId, short bucketId, long objectId, int position, int size) {
+    public RouterRecord(int nodeId, short bucketId, long objectId, Position position) {
         this.nodeId = nodeId;
         this.bucketId = bucketId;
         this.objectId = objectId;
         this.position = position;
-        this.size = size;
     }
 
     public int nodeId() {
@@ -50,22 +47,22 @@ public class RouterRecord {
         return objectId;
     }
 
-    public int position() {
+    public Position position() {
         return position;
     }
 
     public int size() {
-        return size;
+        return position.size();
     }
 
-    public ByteBuf encode() {
-        ByteBuf buf = Unpooled.buffer(1 /* magic */ + 4 /* nodeId */ + 2 /* bucketId */ + 8 /* objectId */ + 4 /* position */ + 4 /* size */);
-        buf.writeByte(MAGIC);
-        buf.writeInt(nodeId);
-        buf.writeShort(bucketId);
-        buf.writeLong(objectId);
-        buf.writeInt(position);
-        buf.writeInt(size);
+    public ByteBuffer encode() {
+        ByteBuffer buf = ByteBuffer.allocate(1 /* magic */ + 4 /* nodeId */ + 2 /* bucketId */ + 8 /* objectId */ + 4 /* position */ + 4 /* size */);
+        buf.putShort(MAGIC);
+        buf.putInt(nodeId);
+        buf.putShort(bucketId);
+        buf.putLong(objectId);
+        buf.putInt(position.position());
+        buf.putInt(position.size());
         return buf;
     }
 
@@ -75,23 +72,23 @@ public class RouterRecord {
             "nodeId=" + nodeId +
             ", bucketId=" + bucketId +
             ", objectId=" + objectId +
-            ", position=" + position +
-            ", size=" + size +
+            ", position=" + position.position() +
+            ", size=" + position.size() +
             '}';
     }
 
-    public static RouterRecord decode(ByteBuf buf) {
+    public static RouterRecord decode(ByteBuffer buf) {
         buf = buf.slice();
-        byte magic = buf.readByte();
+        byte magic = buf.get();
         if (magic != MAGIC) {
             throw new IllegalArgumentException("Invalid magic byte: " + magic);
         }
-        int nodeId = buf.readInt();
-        short bucketId = buf.readShort();
-        long objectId = buf.readLong();
-        int position = buf.readInt();
-        int size = buf.readInt();
-        return new RouterRecord(nodeId, bucketId, objectId, position, size);
+        int nodeId = buf.getInt();
+        short bucketId = buf.getShort();
+        long objectId = buf.getLong();
+        int position = buf.getInt();
+        int size = buf.getInt();
+        return new RouterRecord(nodeId, bucketId, objectId, new Position(position, size));
     }
 
 }

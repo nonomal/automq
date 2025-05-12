@@ -21,6 +21,7 @@ package com.automq.stream.s3.wal.impl.block;
 
 import com.automq.stream.s3.ByteBufAlloc;
 import com.automq.stream.s3.Config;
+import com.automq.stream.s3.context.AppendContext;
 import com.automq.stream.s3.metrics.S3StreamMetricsManager;
 import com.automq.stream.s3.metrics.TimerUtil;
 import com.automq.stream.s3.metrics.stats.StorageOperationStats;
@@ -430,7 +431,7 @@ public class BlockWALService implements WriteAheadLog {
     }
 
     @Override
-    public AppendResult append(TraceContext context, ByteBuf buf, int crc) throws OverCapacityException {
+    public AppendResult append(AppendContext context, ByteBuf buf, int crc) throws OverCapacityException {
         // get current method name
         TraceContext.Scope scope = TraceUtils.createAndStartSpan(context, "BlockWALService::append");
         final long startTime = System.nanoTime();

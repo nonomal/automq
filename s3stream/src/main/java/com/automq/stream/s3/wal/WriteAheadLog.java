@@ -19,6 +19,9 @@
 
 package com.automq.stream.s3.wal;
 
+import com.automq.stream.s3.StreamRecordBatchCodec;
+import com.automq.stream.s3.context.AppendContext;
+import com.automq.stream.s3.model.StreamRecordBatch;
 import com.automq.stream.s3.trace.context.TraceContext;
 import com.automq.stream.s3.wal.common.WALMetadata;
 import com.automq.stream.s3.wal.exception.OverCapacityException;
@@ -50,18 +53,18 @@ public interface WriteAheadLog {
      *
      * @return The data position will be written.
      */
-    AppendResult append(TraceContext context, ByteBuf data, int crc) throws OverCapacityException;
+    AppendResult append(AppendContext context, ByteBuf data, int crc) throws OverCapacityException;
 
-    default AppendResult append(TraceContext context, ByteBuf data) throws OverCapacityException {
+    default AppendResult append(AppendContext context, ByteBuf data) throws OverCapacityException {
         return append(context, data, 0);
     }
 
     default AppendResult append(ByteBuf data, int crc) throws OverCapacityException {
-        return append(TraceContext.DEFAULT, data, crc);
+        return append(AppendContext.DEFAULT, data, crc);
     }
 
     default AppendResult append(ByteBuf data) throws OverCapacityException {
-        return append(TraceContext.DEFAULT, data, 0);
+        return append(AppendContext.DEFAULT, data, 0);
     }
 
     /**

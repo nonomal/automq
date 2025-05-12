@@ -19,6 +19,7 @@
 
 package com.automq.stream.s3.model;
 
+import com.automq.stream.api.RemoteRecordsLocation;
 import com.automq.stream.s3.StreamRecordBatchCodec;
 import com.automq.stream.utils.biniarysearch.ComparableItem;
 
@@ -30,15 +31,21 @@ public class StreamRecordBatch implements Comparable<StreamRecordBatch>, Compara
     private final long epoch;
     private final long baseOffset;
     private final int count;
+    private final RemoteRecordsLocation remoteRecordsLocation;
     private ByteBuf payload;
     private ByteBuf encoded;
 
     public StreamRecordBatch(long streamId, long epoch, long baseOffset, int count, ByteBuf payload) {
+        this(streamId, epoch, baseOffset, count, payload, null);
+    }
+
+    public StreamRecordBatch(long streamId, long epoch, long baseOffset, int count, ByteBuf payload, RemoteRecordsLocation remoteRecordsLocation) {
         this.streamId = streamId;
         this.epoch = epoch;
         this.baseOffset = baseOffset;
         this.count = count;
         this.payload = payload;
+        this.remoteRecordsLocation = remoteRecordsLocation;
     }
 
     public ByteBuf encoded() {
@@ -78,6 +85,10 @@ public class StreamRecordBatch implements Comparable<StreamRecordBatch>, Compara
 
     public int size() {
         return payload.readableBytes();
+    }
+
+    public RemoteRecordsLocation getRemoteRecordsLocation() {
+        return remoteRecordsLocation;
     }
 
     public int occupiedSize() {

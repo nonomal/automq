@@ -19,6 +19,7 @@
 
 package kafka.automq.zerozone;
 
+import java.nio.ByteBuffer;
 import kafka.automq.interceptor.ProduceRequestArgs;
 import kafka.server.RequestLocal;
 import kafka.server.streamaspect.ElasticKafkaApis;
@@ -36,6 +37,8 @@ import com.automq.stream.utils.FutureUtil;
 import com.automq.stream.utils.Systems;
 import com.automq.stream.utils.Threads;
 
+import org.apache.kafka.common.zerozone.Position;
+import org.apache.kafka.common.zerozone.RouterRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,7 +77,7 @@ class RouterIn {
     }
 
     public synchronized CompletableFuture<AutomqZoneRouterResponse> handleZoneRouterRequest(byte[] metadata) {
-        RouterRecord routerRecord = RouterRecord.decode(Unpooled.wrappedBuffer(metadata));
+        RouterRecord routerRecord = RouterRecord.decode(ByteBuffer.wrap(metadata));
         try {
             if (inflightAppendLimiter.tryAcquire(routerRecord.size())) {
                 return handleZoneRouterRequest0(routerRecord).whenComplete((rst, ex) -> {
@@ -97,14 +100,14 @@ class RouterIn {
         // inbound is consumed by the object storage
         ZoneRouterMetricsManager.recordRouterInBytes(routerRecord.nodeId(), routerRecord.size());
         CompletableFuture<List<ZoneRouterProduceRequest>> readCf = new ZoneRouterPackReader(routerRecord.nodeId(), routerRecord.bucketId(), routerRecord.objectId(), objectStorage)
-            .readProduceRequests(new Position(routerRecord.position(), routerRecord.size()));
+            .readProduceRequests(routerRecord.position());
         // Orderly handle the request
         CompletableFuture<Void> prevLastRouterCf = lastRouterCf;
         CompletableFuture<AutomqZoneRouterResponse> appendCf = readCf
             .thenCompose(rst -> prevLastRouterCf.thenApply(nil -> rst))
             .thenComposeAsync(produces -> {
                 List<CompletableFuture<AutomqZoneRouterResponseData.Response>> cfList = new ArrayList<>();
-                produces.stream().map(this::append).forEach(cfList::add);
+                produces.stream().map(request -> append(routerRecord, request)).forEach(cfList::add);
                 return CompletableFuture.allOf(cfList.toArray(new CompletableFuture[0])).thenApply(nil -> {
                     AutomqZoneRouterResponseData response = new AutomqZoneRouterResponseData();
                     cfList.forEach(cf -> response.responses().add(cf.join()));
@@ -116,7 +119,7 @@ class RouterIn {
         return appendCf;
     }
 
-    private CompletableFuture<AutomqZoneRouterResponseData.Response> append(
+    private CompletableFuture<AutomqZoneRouterResponseData.Response> append(RouterRecord routerRecord,
         ZoneRouterProduceRequest zoneRouterProduceRequest) {
         ZoneRouterProduceRequest.Flag flag = new ZoneRouterProduceRequest.Flag(zoneRouterProduceRequest.flag());
         ProduceRequestData data = zoneRouterProduceRequest.data();
@@ -124,7 +127,7 @@ class RouterIn {
             LOGGER.debug("[ROUTER_IN],[APPEND],data={}", data);
         }
 
-        Map<TopicPartition, MemoryRecords> realEntriesPerPartition = ZeroZoneTrafficInterceptor.produceRequestToMap(data);
+        Map<TopicPartition, MemoryRecords> realEntriesPerPartition = ZeroZoneTrafficInterceptor.produceRequestToMap(data, routerRecord, zoneRouterProduceRequest.recordsPositionMap());
         short apiVersion = zoneRouterProduceRequest.apiVersion();
         CompletableFuture<AutomqZoneRouterResponseData.Response> cf = new CompletableFuture<>();
         // TODO: parallel request for different partitions

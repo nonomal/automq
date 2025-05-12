@@ -29,6 +29,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import io.netty.buffer.ByteBuf;
+import org.apache.kafka.common.protocol.PositionalByteBufferAccessor;
+import org.apache.kafka.common.zerozone.Position;
 
 import static kafka.automq.zerozone.ZoneRouterPack.PRODUCE_DATA_BLOCK_MAGIC;
 import static kafka.automq.zerozone.ZoneRouterPack.genObjectPath;
@@ -66,11 +68,13 @@ public class ZoneRouterPackReader {
             short apiVersion = buf.readShort();
             short flag = buf.readShort();
             int dataSize = buf.readInt();
-            ByteBuf dataBuf = buf.slice(buf.readerIndex(), dataSize);
+            int currIndex = buf.readerIndex();
+            ByteBuf dataBuf = buf.slice(currIndex, dataSize);
             ProduceRequestData produceRequestData = new ProduceRequestData();
-            produceRequestData.read(new ByteBufferAccessor(dataBuf.nioBuffer()), apiVersion);
+            PositionalByteBufferAccessor accessor = new PositionalByteBufferAccessor(currIndex, dataBuf.nioBuffer());
+            produceRequestData.read(accessor, apiVersion);
             buf.skipBytes(dataSize);
-            requests.add(new ZoneRouterProduceRequest(apiVersion, flag, produceRequestData));
+            requests.add(new ZoneRouterProduceRequest(apiVersion, flag, produceRequestData, accessor.getRecordsPositionMap()));
         }
         return requests;
     }

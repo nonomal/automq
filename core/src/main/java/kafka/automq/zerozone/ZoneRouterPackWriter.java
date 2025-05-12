@@ -33,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
+import org.apache.kafka.common.zerozone.Position;
 
 import static kafka.automq.zerozone.ZoneRouterPack.FOOTER_SIZE;
 import static kafka.automq.zerozone.ZoneRouterPack.PACK_MAGIC;

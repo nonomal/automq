@@ -20,6 +20,7 @@
 package com.automq.stream.s3;
 
 import com.automq.stream.ByteBufSeqAlloc;
+import com.automq.stream.api.RemoteRecordsLocation;
 import com.automq.stream.s3.model.StreamRecordBatch;
 
 import io.netty.buffer.ByteBuf;
@@ -27,7 +28,10 @@ import io.netty.buffer.ByteBuf;
 import static com.automq.stream.s3.ByteBufAlloc.ENCODE_RECORD;
 
 public class StreamRecordBatchCodec {
+    // record with local payload
     public static final byte MAGIC_V0 = 0x22;
+    // record with remote payload
+    public static final byte MAGIC_V1 = 0x23;
     public static final int HEADER_SIZE =
         1 // magic
             + 8 // streamId
@@ -38,7 +42,9 @@ public class StreamRecordBatchCodec {
     private static final ByteBufSeqAlloc ENCODE_ALLOC = new ByteBufSeqAlloc(ENCODE_RECORD, 8);
 
     public static ByteBuf encode(StreamRecordBatch streamRecord) {
-        int totalLength = HEADER_SIZE + streamRecord.size(); // payload
+        RemoteRecordsLocation remoteRecordsLocation = streamRecord.getRemoteRecordsLocation();
+        boolean isRemotePayload = remoteRecordsLocation != null;
+        int totalLength = HEADER_SIZE + (isRemotePayload ? remoteRecordsLocation.encodedSize() : streamRecord.size()); // payload
         // use sequential allocator to avoid memory fragmentation
         ByteBuf buf = ENCODE_ALLOC.byteBuffer(totalLength);
         buf.writeByte(MAGIC_V0);
@@ -46,8 +52,13 @@ public class StreamRecordBatchCodec {
         buf.writeLong(streamRecord.getEpoch());
         buf.writeLong(streamRecord.getBaseOffset());
         buf.writeInt(streamRecord.getCount());
-        buf.writeInt(streamRecord.size());
-        buf.writeBytes(streamRecord.getPayload().duplicate());
+        if (isRemotePayload) {
+            buf.writeInt(remoteRecordsLocation.encodedSize());
+            buf = remoteRecordsLocation.marshall(buf);
+        } else {
+            buf.writeInt(streamRecord.size());
+            buf.writeBytes(streamRecord.getPayload().duplicate());
+        }
         return buf;
     }
 

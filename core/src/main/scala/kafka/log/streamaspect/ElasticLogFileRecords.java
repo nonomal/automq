@@ -19,9 +19,12 @@
 
 package kafka.log.streamaspect;
 
+import com.automq.stream.api.AppendOptions;
+import com.automq.stream.api.RemoteRecordsLocation;
 import kafka.log.stream.s3.telemetry.ContextUtils;
 import kafka.log.stream.s3.telemetry.TelemetryConstants;
 
+import kafka.log.streamaspect.utils.RecordsUtils;
 import org.apache.kafka.common.network.TransferableChannel;
 import org.apache.kafka.common.record.AbstractRecords;
 import org.apache.kafka.common.record.ConvertedRecords;
@@ -213,6 +216,12 @@ public class ElasticLogFileRecords implements AutoCloseable {
         com.automq.stream.DefaultRecordBatch batch = new com.automq.stream.DefaultRecordBatch(count, 0, Collections.emptyMap(), records.buffer());
 
         AppendContext context = ContextUtils.createAppendContext();
+        if (records instanceof MemoryRecords.MemoryRecordsExt) {
+            MemoryRecords.MemoryRecordsExt ext = (MemoryRecords.MemoryRecordsExt) records;
+            context.setAppendOptions(AppendOptions.builder()
+                .remoteRecordsLocation(RecordsUtils.translate(ext.getLocation()))
+                .build());
+        }
         CompletableFuture<?> cf;
         try {
             cf = TraceUtils.runWithSpanAsync(context, Attributes.empty(), "ElasticLogFileRecords::append",

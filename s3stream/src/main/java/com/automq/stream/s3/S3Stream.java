@@ -215,7 +215,8 @@ public class S3Stream implements Stream, StreamMetadataListener {
             return FutureUtil.failedFuture(new StreamClientException(ErrorCode.STREAM_ALREADY_CLOSED, logIdent + "stream is not writable"));
         }
         long offset = nextOffset.getAndAdd(recordBatch.count());
-        StreamRecordBatch streamRecordBatch = new StreamRecordBatch(streamId, epoch, offset, recordBatch.count(), Unpooled.wrappedBuffer(recordBatch.rawPayload()));
+        StreamRecordBatch streamRecordBatch = new StreamRecordBatch(streamId, epoch, offset, recordBatch.count(),
+            Unpooled.wrappedBuffer(recordBatch.rawPayload()), context.appendOptions().remoteRecordsLocation());
         CompletableFuture<AppendResult> cf = storage.append(context, streamRecordBatch).thenApply(nil -> {
             updateConfirmOffset(offset + recordBatch.count());
             return new DefaultAppendResult(offset);
