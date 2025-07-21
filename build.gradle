@@ -1236,7 +1236,7 @@ project(':core') {
     from(project.siteDocsTar) { into("site-docs/") }
 
     // Include main and test jars from all subprojects
-    subprojects.each { subproject ->
+    rootProject.subprojects.each { subproject ->
         if (subproject.tasks.findByName('jar')) {
             from(subproject.tasks.named('jar')) { into('libs/') }
         }
