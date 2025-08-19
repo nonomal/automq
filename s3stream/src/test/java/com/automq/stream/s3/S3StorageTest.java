@@ -33,9 +33,11 @@ import com.automq.stream.s3.objects.StreamObject;
 import com.automq.stream.s3.operator.MemoryObjectStorage;
 import com.automq.stream.s3.operator.ObjectStorage;
 import com.automq.stream.s3.streams.StreamManager;
+import com.automq.stream.s3.wal.RecordOffset;
 import com.automq.stream.s3.wal.RecoverResult;
 import com.automq.stream.s3.wal.WriteAheadLog;
 import com.automq.stream.s3.wal.exception.OverCapacityException;
+import com.automq.stream.s3.wal.impl.DefaultRecordOffset;
 import com.automq.stream.s3.wal.impl.MemoryWriteAheadLog;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +49,6 @@ import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Method;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -58,9 +58,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 
 import static com.automq.stream.s3.TestUtils.random;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -87,7 +84,6 @@ public class S3StorageTest {
     ObjectStorage objectStorage;
     S3Storage storage;
     Config config;
-    S3Storage.WALConfirmOffsetCalculator calculator;
 
     private static StreamRecordBatch newRecord(long streamId, long offset) {
         return new StreamRecordBatch(streamId, 0, offset, 1, random(1));
@@ -104,7 +100,6 @@ public class S3StorageTest {
         storage = new S3Storage(config, wal,
             streamManager, objectManager, new StreamReaders(config.blockCacheSize(), objectManager, objectStorage,
             new DefaultObjectReaderFactory(objectStorage)), objectStorage, mock(StorageFailureHandler.class));
-        calculator = new S3Storage.WALConfirmOffsetCalculator();
     }
 
     @Test
@@ -148,171 +143,6 @@ public class S3StorageTest {
     }
 
     @Test
-    public void testWALConfirmOffsetCalculator() {
-        S3Storage.WALConfirmOffsetCalculator calc = new S3Storage.WALConfirmOffsetCalculator();
-        WalWriteRequest r0 = new WalWriteRequest(null, 0L, null);
-        WalWriteRequest r1 = new WalWriteRequest(null, 1L, null);
-        WalWriteRequest r2 = new WalWriteRequest(null, 2L, null);
-        WalWriteRequest r3 = new WalWriteRequest(null, 3L, null);
-
-        calc.add(r3);
-        calc.add(r1);
-        calc.add(r2);
-        calc.add(r0);
-
-        calc.update();
-        assertEquals(-1L, calc.get());
-
-        r0.confirmed = true;
-        calc.update();
-        assertEquals(0L, calc.get());
-
-        r3.confirmed = true;
-        calc.update();
-        assertEquals(0L, calc.get());
-
-        r1.confirmed = true;
-        calc.update();
-        assertEquals(1L, calc.get());
-
-        r2.confirmed = true;
-        calc.update();
-        assertEquals(3L, calc.get());
-    }
-
-    @Test
-    public void testWALCallbackSequencer() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-        WalWriteRequest r0 = new WalWriteRequest(newRecord(233L, 10L), 100L, new CompletableFuture<>());
-        WalWriteRequest r1 = new WalWriteRequest(newRecord(233L, 11L), 101L, new CompletableFuture<>());
-        WalWriteRequest r2 = new WalWriteRequest(newRecord(234L, 20L), 102L, new CompletableFuture<>());
-        WalWriteRequest r3 = new WalWriteRequest(newRecord(234L, 21L), 103L, new CompletableFuture<>());
-
-        seq.before(r0);
-        seq.before(r1);
-        seq.before(r2);
-        seq.before(r3);
-
-        assertEquals(Collections.emptyList(), seq.after(r3));
-        assertEquals(List.of(r2, r3), seq.after(r2));
-        assertEquals(List.of(r0), seq.after(r0));
-        assertEquals(List.of(r1), seq.after(r1));
-    }
-
-    /**
-     * WALCallbackSequencer - Test after() when a stream's queue becomes empty
-     */
-    @Test
-    public void testAfterWhenQueueBecomesEmpty() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-        long streamId = 700L;
-
-        WalWriteRequest request = new WalWriteRequest(newRecord(streamId, 70L), 700L, new CompletableFuture<>());
-        seq.before(request);
-
-        // Process the request, making the queue empty
-        List<WalWriteRequest> result = seq.after(request);
-        assertEquals(List.of(request), result);
-
-        // Verify that subsequent processing works correctly after the queue became empty
-        // Add a new request to the same stream
-        WalWriteRequest newRequest = new WalWriteRequest(newRecord(streamId, 71L), 701L, new CompletableFuture<>());
-        seq.before(newRequest);
-
-        // Process the new request
-        List<WalWriteRequest> newResult = seq.after(newRequest);
-        assertEquals(List.of(newRequest), newResult);
-    }
-
-    /**
-     * WALCallbackSequencer
-     */
-    @Test
-    public void testTryFreeWithEmptyQueue() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-        long streamId = 200L;
-
-        // Create a request and process it, emptying the queue
-        WalWriteRequest request = new WalWriteRequest(newRecord(streamId, 20L), 200L, new CompletableFuture<>());
-        seq.before(request);
-        seq.after(request);
-
-        // Call tryFree to remove the empty queue
-        seq.tryFree(streamId);
-
-        // If the queue was removed correctly, a new queue will be created and processed normally
-        WalWriteRequest newRequest = new WalWriteRequest(newRecord(streamId, 21L), 201L, new CompletableFuture<>());
-        seq.before(newRequest);
-        List<WalWriteRequest> result = seq.after(newRequest);
-        assertEquals(List.of(newRequest), result);
-    }
-
-    /**
-     * WALCallbackSequencer
-     */
-    @Test
-    public void testTryFreeWithNonEmptyQueue() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-        long streamId = 300L;
-
-        // Add multiple requests
-        WalWriteRequest r0 = new WalWriteRequest(newRecord(streamId, 30L), 300L, new CompletableFuture<>());
-        WalWriteRequest r1 = new WalWriteRequest(newRecord(streamId, 31L), 301L, new CompletableFuture<>());
-
-        seq.before(r0);
-        seq.before(r1);
-
-        // Only process the first request, the queue should be non-empty
-        seq.after(r0);
-
-        // Call tryFree, but the queue should not be removed
-        seq.tryFree(streamId);
-
-        // The second request should still in the queue
-        List<WalWriteRequest> result = seq.after(r1);
-        assertEquals(List.of(r1), result);
-    }
-
-    /**
-     * WALCallbackSequencer
-     */
-    @Test
-    public void testBeforeExceptionHandling() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-
-        // Create a request that will cause the before method to throw an exception,
-        // For example, let record be null
-        WalWriteRequest request = new WalWriteRequest(null, 500L, new CompletableFuture<>());
-
-        seq.before(request);
-
-        // Verify that the future has been completed abnormally
-        assertTrue(request.cf.isCompletedExceptionally());
-    }
-
-    /**
-     * WALCallbackSequencer
-     */
-    @Test
-    public void testAfterWithDifferentOffset() {
-        S3Storage.WALCallbackSequencer seq = new S3Storage.WALCallbackSequencer();
-        long streamId = 600L;
-
-        WalWriteRequest r0 = new WalWriteRequest(newRecord(streamId, 60L), 600L, new CompletableFuture<>());
-        seq.before(r0);
-
-        // Create a request with the same streamId but a different offset
-        WalWriteRequest r1 = new WalWriteRequest(newRecord(streamId, 61L), 601L, new CompletableFuture<>());
-
-        // Process r1, but it is not in the queue, so after should return an empty list
-        List<WalWriteRequest> result = seq.after(r1);
-        assertEquals(Collections.emptyList(), result);
-
-        // Verify that r1 is marked as persistent
-        assertTrue(r1.persisted);
-    }
-
-    @Test
     public void testUploadWALObject_sequence() throws ExecutionException, InterruptedException, TimeoutException {
         List<CompletableFuture<Long>> objectIdCfList = List.of(new CompletableFuture<>(), new CompletableFuture<>());
         AtomicInteger objectCfIndex = new AtomicInteger();
@@ -325,13 +155,13 @@ public class S3StorageTest {
         LogCache.LogCacheBlock logCacheBlock1 = new LogCache.LogCacheBlock(1024);
         logCacheBlock1.put(newRecord(233L, 10L));
         logCacheBlock1.put(newRecord(234L, 10L));
-        logCacheBlock1.confirmOffset(10L);
+        logCacheBlock1.lastRecordOffset(DefaultRecordOffset.of(0, 10L, 0));
         CompletableFuture<Void> cf1 = storage.uploadDeltaWAL(logCacheBlock1);
 
         LogCache.LogCacheBlock logCacheBlock2 = new LogCache.LogCacheBlock(1024);
         logCacheBlock2.put(newRecord(233L, 20L));
         logCacheBlock2.put(newRecord(234L, 20L));
-        logCacheBlock2.confirmOffset(20L);
+        logCacheBlock2.lastRecordOffset(DefaultRecordOffset.of(0, 20L, 0));
         CompletableFuture<Void> cf2 = storage.uploadDeltaWAL(logCacheBlock2);
 
         // sequence get objectId
@@ -356,11 +186,11 @@ public class S3StorageTest {
     @Test
     public void testRecoverContinuousRecords() {
         List<RecoverResult> recoverResults = List.of(
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 10L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 11L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 12L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 15L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(234L, 20L)))
+            new TestRecoverResult(newRecord(233L, 10L)),
+            new TestRecoverResult(newRecord(233L, 11L)),
+            new TestRecoverResult(newRecord(233L, 12L)),
+            new TestRecoverResult(newRecord(233L, 15L)),
+            new TestRecoverResult(newRecord(234L, 20L))
         );
         Iterator<RecoverResult> iterator = recoverResults.iterator();
 
@@ -379,9 +209,9 @@ public class S3StorageTest {
     @Test
     public void testRecoverDataLoss() {
         List<RecoverResult> recoverResults = List.of(
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 10L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 11L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(233L, 12L)))
+            new TestRecoverResult(newRecord(233L, 10L)),
+            new TestRecoverResult(newRecord(233L, 11L)),
+            new TestRecoverResult(newRecord(233L, 12L))
         );
         Iterator<RecoverResult> iterator = recoverResults.iterator();
 
@@ -396,13 +226,13 @@ public class S3StorageTest {
     @Test
     public void testRecoverOutOfOrderRecords() {
         List<RecoverResult> recoverResults = List.of(
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 9L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 10L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 13L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 11L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 12L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 14L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 20L)))
+            new TestRecoverResult(newRecord(42L, 9L)),
+            new TestRecoverResult(newRecord(42L, 10L)),
+            new TestRecoverResult(newRecord(42L, 13L)),
+            new TestRecoverResult(newRecord(42L, 11L)),
+            new TestRecoverResult(newRecord(42L, 12L)),
+            new TestRecoverResult(newRecord(42L, 14L)),
+            new TestRecoverResult(newRecord(42L, 20L))
         );
 
         Map<Long, Long> streamEndOffsets = Map.of(42L, 10L);
@@ -423,12 +253,12 @@ public class S3StorageTest {
     @Test
     public void testSegmentedRecovery() {
         List<RecoverResult> recoverResults = List.of(
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 10L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 11L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 12L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 13L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 14L))),
-            new TestRecoverResult(StreamRecordBatchCodec.encode(newRecord(42L, 20L)))
+            new TestRecoverResult(newRecord(42L, 10L)),
+            new TestRecoverResult(newRecord(42L, 11L)),
+            new TestRecoverResult(newRecord(42L, 12L)),
+            new TestRecoverResult(newRecord(42L, 13L)),
+            new TestRecoverResult(newRecord(42L, 14L)),
+            new TestRecoverResult(newRecord(42L, 20L))
         );
         Iterator<RecoverResult> iterator = recoverResults.iterator();
 
@@ -488,112 +318,20 @@ public class S3StorageTest {
     }
 
     static class TestRecoverResult implements RecoverResult {
-        private final ByteBuf record;
+        private final StreamRecordBatch record;
 
-        public TestRecoverResult(ByteBuf record) {
+        public TestRecoverResult(StreamRecordBatch record) {
             this.record = record;
         }
 
         @Override
-        public ByteBuf record() {
+        public StreamRecordBatch record() {
             return record;
         }
 
         @Override
-        public long recordOffset() {
-            return 0;
+        public RecordOffset recordOffset() {
+            return DefaultRecordOffset.of(0, 0, 0);
         }
-    }
-
-    /**
-     * WALConfirmOffsetCalculator - Test calculate() returns NOOP when queue is empty
-     */
-    @Test
-    void testEmptyQueueReturnsNoop() throws Exception {
-        Method method = S3Storage.WALConfirmOffsetCalculator.class.getDeclaredMethod("calculate");
-        method.setAccessible(true);
-        long offset = (long) method.invoke(calculator);
-        assertEquals(S3Storage.WALConfirmOffsetCalculator.NOOP_OFFSET, offset);
-    }
-
-    /**
-     * WALConfirmOffsetCalculator - Test calculate() returns latest offset when all requests are confirmed
-     */
-    @Test
-    void testAllConfirmedOffsets() throws Exception {
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 10L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            10L,
-            new CompletableFuture<>()
-        ) {{ confirmed = true; }});
-
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 20L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            20L,
-            new CompletableFuture<>()
-        ) {{ confirmed = true; }});
-
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 30L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            30L,
-            new CompletableFuture<>()
-        ) {{ confirmed = true; }});
-
-        Method method = S3Storage.WALConfirmOffsetCalculator.class.getDeclaredMethod("calculate");
-        method.setAccessible(true);
-        long offset = (long) method.invoke(calculator);
-        assertEquals(30, offset);
-    }
-
-    /**
-     * WALConfirmOffsetCalculator - Test calculate() stops at first unconfirmed request
-     */
-    @Test
-    void testUnconfirmedBlocksConfirmedOffset() throws Exception {
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 10L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            10L,
-            new CompletableFuture<>()
-        ) {{ confirmed = true; }});
-
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 20L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            20L,
-            new CompletableFuture<>()
-        ) {{ confirmed = false; }});
-
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 30L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            30L,
-            new CompletableFuture<>()
-        ) {{ confirmed = true; }});
-
-        Method method = S3Storage.WALConfirmOffsetCalculator.class.getDeclaredMethod("calculate");
-        method.setAccessible(true);
-        long offset = (long) method.invoke(calculator);
-        assertEquals(10, offset);
-    }
-
-    /**
-     * WALConfirmOffsetCalculator - Test calculate() returns NOOP when all requests are unconfirmed
-     */
-    @Test
-    void testAllUnconfirmedReturnsNoop() throws Exception {
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 10L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            10L,
-            new CompletableFuture<>()
-        ) {{ confirmed = false; }});
-
-        calculator.add(new WalWriteRequest(
-            new StreamRecordBatch(1L, 0L, 20L, 1, Unpooled.buffer(10).writeBytes(new byte[10])),
-            20L,
-            new CompletableFuture<>()
-        ) {{ confirmed = false; }});
-
-        Method method = S3Storage.WALConfirmOffsetCalculator.class.getDeclaredMethod("calculate");
-        method.setAccessible(true);
-        long offset = (long) method.invoke(calculator);
-        assertEquals(S3Storage.WALConfirmOffsetCalculator.NOOP_OFFSET, offset);
     }
 }
