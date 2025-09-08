@@ -118,7 +118,6 @@ public class S3StreamClient implements StreamClient {
         this.config = config;
         this.networkInboundBucket = networkInboundBucket;
         this.networkOutboundBucket = networkOutboundBucket;
-        ConfigValidator.validate(config);
         startStreamObjectsCompactions();
     }
 
@@ -206,7 +205,7 @@ public class S3StreamClient implements StreamClient {
         return S3Stream.create(
             metadata.streamId(), metadata.epoch(),
             metadata.startOffset(), metadata.endOffset(),
-            storage, streamManager, networkInboundBucket, networkOutboundBucket, options);
+            storage, streamManager, options);
     }
 
     @Override

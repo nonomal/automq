@@ -172,7 +172,7 @@ public class S3Storage implements Storage {
         if (config.snapshotReadEnable()) {
             deltaWALCacheSize = Math.max(config.walCacheSize() / 3, 10L * 1024 * 1024);
             snapshotReadCacheSize = Math.max(config.walCacheSize() / 3 * 2, 10L * 1024 * 1024);
-            delayTrim = new DelayTrim(TimeUnit.SECONDS.toMillis(10));
+            delayTrim = new DelayTrim(TimeUnit.SECONDS.toMillis(30));
         } else {
             delayTrim = new DelayTrim(0);
         }
@@ -525,7 +525,15 @@ public class S3Storage implements Storage {
         }
         FutureUtil.suppress(() -> delayTrim.close(), LOGGER);
         deltaWAL.shutdownGracefully();
-        ThreadUtils.shutdownExecutor(backgroundExecutor, 10, TimeUnit.SECONDS, LOGGER);
+        backgroundExecutor.shutdown();
+        try {
+            if (!backgroundExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                LOGGER.warn("await backgroundExecutor timeout 10s");
+            }
+        } catch (InterruptedException e) {
+            backgroundExecutor.shutdownNow();
+            LOGGER.warn("await backgroundExecutor close fail", e);
+        }
     }
 
     @Override

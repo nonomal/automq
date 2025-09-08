@@ -93,17 +93,16 @@ public class TopicConfig {
         "deletes the old segments. Default value is -2, it represents `retention.bytes` value to be used. The effective value should always be " +
         "less than or equal to `retention.bytes` value.";
 
-    public static final String REMOTE_LOG_DISABLE_POLICY_RETAIN = "retain";
-    public static final String REMOTE_LOG_DISABLE_POLICY_DELETE = "delete";
+    public static final String REMOTE_LOG_COPY_DISABLE_CONFIG = "remote.log.copy.disable";
+    public static final String REMOTE_LOG_COPY_DISABLE_DOC = "Determines whether tiered data for a topic should become read only," +
+        " and no more data uploading on a topic. Once this config is set to true, the local retention configuration " +
+        "(i.e. local.retention.ms/bytes) becomes irrelevant, and all data expiration follows the topic-wide retention configuration" +
+        "(i.e. retention.ms/bytes).";
 
-    public static final String REMOTE_LOG_DISABLE_POLICY_CONFIG = "remote.log.disable.policy";
-
-    public static final String REMOTE_LOG_DISABLE_POLICY_DOC = String.format("Determines whether tiered data for a topic should be retained or " +
-            "deleted after tiered storage disablement on a topic. The two valid options are \"%s\" and \"%s\". If %s is " +
-            "selected then all data in remote will be kept post-disablement and will only be deleted when it breaches expiration " +
-            "thresholds. If %s is selected then the data will be made inaccessible immediately by advancing the log start offset and will be " +
-            "deleted asynchronously.", REMOTE_LOG_DISABLE_POLICY_RETAIN, REMOTE_LOG_DISABLE_POLICY_DELETE,
-        REMOTE_LOG_DISABLE_POLICY_RETAIN, REMOTE_LOG_DISABLE_POLICY_DELETE);
+    public static final String REMOTE_LOG_DELETE_ON_DISABLE_CONFIG = "remote.log.delete.on.disable";
+    public static final String REMOTE_LOG_DELETE_ON_DISABLE_DOC = "Determines whether tiered data for a topic should be " +
+        "deleted after tiered storage is disabled on a topic. This configuration should be enabled when trying to " +
+        "set `remote.storage.enable` from true to false";
 
     public static final String MAX_MESSAGE_BYTES_CONFIG = "max.message.bytes";
     public static final String MAX_MESSAGE_BYTES_DOC =
@@ -166,7 +165,9 @@ public class TopicConfig {
     public static final String UNCLEAN_LEADER_ELECTION_ENABLE_CONFIG = "unclean.leader.election.enable";
     public static final String UNCLEAN_LEADER_ELECTION_ENABLE_DOC = "Indicates whether to enable replicas " +
         "not in the ISR set to be elected as leader as a last resort, even though doing so may result in data " +
-        "loss.";
+        "loss.<p>Note: In KRaft mode, when enabling this config dynamically, it needs to wait for the unclean leader election" +
+        "thread to trigger election periodically (default is 5 minutes). Please run `kafka-leader-election.sh` with `unclean` option " +
+        "to trigger the unclean leader election immediately if needed.</p>";
 
     public static final String MIN_IN_SYNC_REPLICAS_CONFIG = "min.insync.replicas";
     public static final String MIN_IN_SYNC_REPLICAS_DOC = "When a producer sets acks to \"all\" (or \"-1\"), " +
@@ -264,8 +265,39 @@ public class TopicConfig {
     public static final String TABLE_TOPIC_COMMIT_INTERVAL_DOC = "The table topic commit interval(ms)";
     public static final String TABLE_TOPIC_NAMESPACE_CONFIG = "automq.table.topic.namespace";
     public static final String TABLE_TOPIC_NAMESPACE_DOC = "The table topic table namespace";
+
     public static final String TABLE_TOPIC_SCHEMA_TYPE_CONFIG = "automq.table.topic.schema.type";
-    public static final String TABLE_TOPIC_SCHEMA_TYPE_DOC = "The table topic schema type, support schemaless, schema";
+    public static final String TABLE_TOPIC_SCHEMA_TYPE_DOC = "[DEPRECATED] The table topic schema type configuration. " +
+        "This configuration is deprecated and will be removed in a future release. " +
+        "Please use the new separate converter and transform configurations instead. " +
+        "Supported values: 'schemaless' (maps to convert.value.type=raw, transform.value.type=none), " +
+        "'schema' (maps to convert.value.type=by_schema_id, transform.value.type=flatten).";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_TYPE_CONFIG = "automq.table.topic.convert.value.type";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_TYPE_DOC = "How to parse Kafka record values. " +
+        "Supported: 'raw', 'string', 'by_schema_id', 'by_latest_schema'. " +
+        "Schema Registry URL required for 'by_schema_id' and 'by_latest_schema'.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_TYPE_CONFIG = "automq.table.topic.convert.key.type";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_TYPE_DOC = "How to parse Kafka record keys. " +
+        "Supported: 'raw', 'string', 'by_schema_id', 'by_latest_schema'. " +
+        "Schema Registry URL required for 'by_schema_id' and 'by_latest_schema'.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_PREFIX = "automq.table.topic.convert.value.by_latest_schema.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_PREFIX = "automq.table.topic.convert.key.by_latest_schema.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_SUBJECT_CONFIG = "automq.table.topic.convert.key.subject";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_SUBJECT_DOC = "The Schema Registry subject name for key schemas. " +
+        "Defaults to '{topic-name}-key' if not specified.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_MESSAGE_FULL_NAME_CONFIG = "automq.table.topic.convert.key.message.full.name";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_MESSAGE_FULL_NAME_DOC = "The fully qualified message name for Protobuf key schemas. " +
+        "Used when schema contains multiple message types. Defaults to first message type.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_TRANSFORM_VALUE_TYPE_CONFIG = "automq.table.topic.transform.value.type";
+    public static final String AUTOMQ_TABLE_TOPIC_TRANSFORM_VALUE_TYPE_DOC = "Transformation to apply to the record value after conversion. " +
+        "Supported: 'none', 'flatten' (extract fields from structured records), " +
+        "'flatten_debezium' (process Debezium CDC events). " +
+        "Note: 'flatten_debezium' requires schema-based conversion.";
+
     public static final String TABLE_TOPIC_ID_COLUMNS_CONFIG = "automq.table.topic.id.columns";
     public static final String TABLE_TOPIC_ID_COLUMNS_DOC = "The primary key, comma-separated list of columns that identify a row in tables."
         + "ex. [region, name]";
@@ -275,6 +307,9 @@ public class TopicConfig {
     public static final String TABLE_TOPIC_UPSERT_ENABLE_DOC = "The configuration controls whether enable table topic upsert";
     public static final String TABLE_TOPIC_CDC_FIELD_CONFIG = "automq.table.topic.cdc.field";
     public static final String TABLE_TOPIC_CDC_FIELD_DOC = "The name of the field containing the CDC operation, I, U, or D";
+
+    public static final String AUTOMQ_TABLE_TOPIC_ERRORS_TOLERANCE_CONFIG = "automq.table.topic.errors.tolerance";
+    public static final String AUTOMQ_TABLE_TOPIC_ERRORS_TOLERANCE_DOC = "Configures the error handling strategy for table topic record processing. Valid values are <code>none</code>, <code>invalid_data</code>, and <code>all</code>.";
 
     public static final String KAFKA_LINKS_ID_CONFIG = "automq.kafka.links.id";
     public static final String KAFKA_LINKS_ID_DOC = "The unique id of a kafka link";

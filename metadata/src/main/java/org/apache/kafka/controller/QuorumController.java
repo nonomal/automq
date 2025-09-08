@@ -177,6 +177,7 @@ import org.apache.kafka.raft.RaftClient;
 import org.apache.kafka.server.authorizer.AclCreateResult;
 import org.apache.kafka.server.authorizer.AclDeleteResult;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
+import org.apache.kafka.server.common.KRaftVersion;
 import org.apache.kafka.server.common.MetadataVersion;
 import org.apache.kafka.server.fault.FaultHandler;
 import org.apache.kafka.server.fault.FaultHandlerException;
@@ -265,7 +266,6 @@ public final class QuorumController implements Controller {
         private QuorumFeatures quorumFeatures = null;
         private short defaultReplicationFactor = 3;
         private int defaultNumPartitions = 1;
-        private int defaultMinIsr = 1;
         private ReplicaPlacer replicaPlacer = new StripedReplicaPlacer(new Random());
         private OptionalLong leaderImbalanceCheckIntervalNs = OptionalLong.empty();
         private OptionalLong maxIdleIntervalNs = OptionalLong.empty();
@@ -284,6 +284,8 @@ public final class QuorumController implements Controller {
         private long delegationTokenMaxLifeMs;
         private long delegationTokenExpiryTimeMs;
         private long delegationTokenExpiryCheckIntervalMs;
+        private long uncleanLeaderElectionCheckIntervalMs = TimeUnit.MINUTES.toMillis(5);
+        private String interBrokerListenerName = "PLAINTEXT";
 
         // AutoMQ for Kafka inject start
         private StreamClient streamClient;
@@ -347,11 +349,6 @@ public final class QuorumController implements Controller {
 
         public Builder setDefaultNumPartitions(int defaultNumPartitions) {
             this.defaultNumPartitions = defaultNumPartitions;
-            return this;
-        }
-
-        public Builder setDefaultMinIsr(int defaultMinIsr) {
-            this.defaultMinIsr = defaultMinIsr;
             return this;
         }
 
@@ -462,6 +459,16 @@ public final class QuorumController implements Controller {
         }
         // AutoMQ for Kafka inject end
 
+        public Builder setUncleanLeaderElectionCheckIntervalMs(long uncleanLeaderElectionCheckIntervalMs) {
+            this.uncleanLeaderElectionCheckIntervalMs = uncleanLeaderElectionCheckIntervalMs;
+            return this;
+        }
+
+        public Builder setInterBrokerListenerName(String interBrokerListenerName) {
+            this.interBrokerListenerName = interBrokerListenerName;
+            return this;
+        }
+
         public QuorumController build() throws Exception {
             if (raftClient == null) {
                 throw new IllegalStateException("You must set a raft client.");
@@ -501,7 +508,6 @@ public final class QuorumController implements Controller {
                     quorumFeatures,
                     defaultReplicationFactor,
                     defaultNumPartitions,
-                    defaultMinIsr,
                     replicaPlacer,
                     leaderImbalanceCheckIntervalNs,
                     maxIdleIntervalNs,
@@ -520,9 +526,13 @@ public final class QuorumController implements Controller {
                     delegationTokenExpiryTimeMs,
                     delegationTokenExpiryCheckIntervalMs,
                     eligibleLeaderReplicasEnabled,
+                    // AutoMQ inject start
                     streamClient,
                     quorumVoters,
-                    extension
+                    extension,
+                    // AutoMQ inject end
+                    uncleanLeaderElectionCheckIntervalMs,
+                    interBrokerListenerName
                 );
             } catch (Exception e) {
                 Utils.closeQuietly(queue, "event queue");
@@ -944,9 +954,10 @@ public final class QuorumController implements Controller {
                         // succeed; if it does not, that's a fatal error. It is important to do this before
                         // scheduling the record for Raft replication.
                         int recordIndex = 0;
-                        long nextWriteOffset = offsetControl.nextWriteOffset();
+                        long lastOffset = raftClient.prepareAppend(controllerEpoch, records);
+                        long baseOffset = lastOffset - records.size() + 1;
                         for (ApiMessageAndVersion message : records) {
-                            long recordOffset = nextWriteOffset + recordIndex;
+                            long recordOffset = baseOffset + recordIndex;
                             try {
                                 replay(message.message(), Optional.empty(), recordOffset);
                             } catch (Throwable e) {
@@ -954,17 +965,14 @@ public final class QuorumController implements Controller {
                                     "record at offset %d on active controller, from the " +
                                     "batch with baseOffset %d",
                                     message.message().getClass().getSimpleName(),
-                                    recordOffset, nextWriteOffset);
+                                    recordOffset, baseOffset);
                                 throw fatalFaultHandler.handleFault(failureMessage, e);
                             }
                             recordIndex++;
                         }
-                        long nextEndOffset = nextWriteOffset - 1 + recordIndex;
-                        raftClient.scheduleAtomicAppend(controllerEpoch,
-                            OptionalLong.of(nextWriteOffset),
-                            records);
-                        offsetControl.handleScheduleAtomicAppend(nextEndOffset);
-                        return nextEndOffset;
+                        raftClient.schedulePreparedAppend();
+                        offsetControl.handleScheduleAppend(lastOffset);
+                        return lastOffset;
                     }
                 );
                 op.processBatchEndOffset(offset);
@@ -977,6 +985,9 @@ public final class QuorumController implements Controller {
             // After every controller write event, schedule a leader rebalance if there are any topic partition
             // with leader that is not the preferred leader.
             maybeScheduleNextBalancePartitionLeaders();
+
+            // Schedule a new unclean leader election if there are partitions that do not have a leader.
+            maybeScheduleNextElectUncleanLeaders();
 
             // Remember the latest offset and future if it is not already completed
             if (!future.isDone()) {
@@ -1184,7 +1195,10 @@ public final class QuorumController implements Controller {
                         int epoch = batch.epoch();
                         List<ApiMessageAndVersion> messages = batch.records();
 
-                        if (isActive) {
+                        if (messages.isEmpty()) {
+                            log.debug("Skipping handling commit for batch with no data records with offset {} and epoch {}.", offset, epoch);
+                            offsetControl.handleCommitBatchMetrics(batch);
+                        } else if (isActive) {
                             // If the controller is active, the records were already replayed,
                             // so we don't need to do it here.
                             log.debug("Completing purgatory items up to offset {} and epoch {}.", offset, epoch);
@@ -1194,9 +1208,6 @@ public final class QuorumController implements Controller {
                             offsetControl.handleCommitBatch(batch);
                             deferredEventQueue.completeUpTo(offsetControl.lastStableOffset());
                             deferredUnstableEventQueue.completeUpTo(offsetControl.lastCommittedOffset());
-
-                            // The active controller can delete up to the current committed offset.
-                            snapshotRegistry.deleteSnapshotsUpTo(offsetControl.lastStableOffset());
                         } else {
                             // If the controller is a standby, replay the records that were
                             // created by the active controller.
@@ -1380,6 +1391,7 @@ public final class QuorumController implements Controller {
             // metadata.version and other in-memory state.
             maybeScheduleNextExpiredDelegationTokenSweep();
             maybeScheduleNextBalancePartitionLeaders();
+            maybeScheduleNextElectUncleanLeaders();
             maybeScheduleNextWriteNoOpRecord();
         }
     }
@@ -1400,6 +1412,7 @@ public final class QuorumController implements Controller {
             clusterControl.deactivate();
             cancelMaybeFenceReplicas();
             cancelMaybeBalancePartitionLeaders();
+            cancelMaybeNextElectUncleanLeaders();
             cancelNextWriteNoOpRecord();
         } catch (Throwable e) {
             fatalFaultHandler.handleFault("exception while renouncing leadership", e);
@@ -1474,7 +1487,13 @@ public final class QuorumController implements Controller {
             );
 
             ControllerWriteEvent<Boolean> event = new ControllerWriteEvent<>(MAYBE_BALANCE_PARTITION_LEADERS, () -> {
+                long startTimeNs = time.nanoseconds();
                 ControllerResult<Boolean> result = replicationControl.maybeBalancePartitionLeaders();
+                long endTimeNs = time.nanoseconds();
+                long durationNs = endTimeNs - startTimeNs;
+                log.info("maybeBalancePartitionLeaders: generated {} records in {} microseconds.{}",
+                    result.records().size(), NANOSECONDS.toMicros(durationNs),
+                        result.response() ? " Rescheduling immediately." : "");
 
                 // reschedule the operation after the leaderImbalanceCheckIntervalNs interval.
                 // Mark the imbalance event as completed and reschedule if necessary
@@ -1510,6 +1529,54 @@ public final class QuorumController implements Controller {
     private void cancelMaybeBalancePartitionLeaders() {
         imbalancedScheduled = ImbalanceSchedule.DEFERRED;
         queue.cancelDeferred(MAYBE_BALANCE_PARTITION_LEADERS);
+    }
+
+    private static final String MAYBE_ELECT_UNCLEAN_LEADERS = "maybeElectUncleanLeaders";
+
+    private void maybeScheduleNextElectUncleanLeaders() {
+        if (uncleanScheduled != ImbalanceSchedule.SCHEDULED &&
+                replicationControl.areSomePartitionsLeaderless()) {
+            log.debug(
+                "Scheduling write event for {} because scheduled ({}), and areSomePartitionsLeaderless ({})",
+                MAYBE_ELECT_UNCLEAN_LEADERS,
+                uncleanScheduled,
+                replicationControl.areSomePartitionsLeaderless()
+            );
+
+            ControllerWriteEvent<Boolean> event = new ControllerWriteEvent<>(MAYBE_ELECT_UNCLEAN_LEADERS, () -> {
+                long startTimeNs = time.nanoseconds();
+                ControllerResult<Boolean> result = replicationControl.maybeElectUncleanLeaders();
+                long endTimeNs = time.nanoseconds();
+                long durationNs = endTimeNs - startTimeNs;
+                log.info("maybeElectUncleanLeaders: generated {} records in {} microseconds.{}",
+                        result.records().size(), NANOSECONDS.toMicros(durationNs),
+                        result.response() ? " Rescheduling immediately." : "");
+                if (result.response()) {
+                    uncleanScheduled = ImbalanceSchedule.IMMEDIATELY;
+                } else {
+                    uncleanScheduled = ImbalanceSchedule.DEFERRED;
+                }
+                return result;
+            }, EnumSet.of(DOES_NOT_UPDATE_QUEUE_TIME));
+
+            long delayNs = time.nanoseconds();
+            if (uncleanScheduled == ImbalanceSchedule.DEFERRED) {
+                delayNs += uncleanLeaderElectionCheckIntervalNs;
+            } else {
+                // The current implementation of KafkaEventQueue always picks from the deferred collection of operations
+                // before picking from the non-deferred collection of operations. This can result in some unfairness if
+                // deferred operation are scheduled for immediate execution. This delays them by a small amount of time.
+                delayNs += NANOSECONDS.convert(10, TimeUnit.MILLISECONDS);
+            }
+            queue.scheduleDeferred(MAYBE_ELECT_UNCLEAN_LEADERS, new EarliestDeadlineFunction(delayNs), event);
+            uncleanScheduled = ImbalanceSchedule.SCHEDULED;
+        }
+    }
+
+
+    private void cancelMaybeNextElectUncleanLeaders() {
+        uncleanScheduled = ImbalanceSchedule.DEFERRED;
+        queue.cancelDeferred(MAYBE_ELECT_UNCLEAN_LEADERS);
     }
 
     private static final String WRITE_NO_OP_RECORD = "writeNoOpRecord";
@@ -1945,6 +2012,11 @@ public final class QuorumController implements Controller {
     private ImbalanceSchedule imbalancedScheduled = ImbalanceSchedule.DEFERRED;
 
     /**
+     * Tracks the scheduling state for unclean leader election operations.
+     */
+    private ImbalanceSchedule uncleanScheduled = ImbalanceSchedule.DEFERRED;
+
+    /**
      * Tracks if the write of the NoOpRecord has been scheduled.
      */
     private boolean noOpRecordScheduled = false;
@@ -1959,6 +2031,11 @@ public final class QuorumController implements Controller {
     private final boolean zkMigrationEnabled;
 
     private final boolean eligibleLeaderReplicasEnabled;
+
+    /**
+     * The number of nanoseconds between unclean leader election checks.
+     */
+    private final long uncleanLeaderElectionCheckIntervalNs;
 
     /**
      * The maximum number of records per batch to allow.
@@ -2023,7 +2100,6 @@ public final class QuorumController implements Controller {
         QuorumFeatures quorumFeatures,
         short defaultReplicationFactor,
         int defaultNumPartitions,
-        int defaultMinIsr,
         ReplicaPlacer replicaPlacer,
         OptionalLong leaderImbalanceCheckIntervalNs,
         OptionalLong maxIdleIntervalNs,
@@ -2046,9 +2122,11 @@ public final class QuorumController implements Controller {
         // AutoMQ inject start
         StreamClient streamClient,
         List<String> quorumVoters,
-        Function<QuorumController, QuorumControllerExtension> extension
+        Function<QuorumController, QuorumControllerExtension> extension,
         // AutoMQ inject end
 
+        long uncleanLeaderElectionCheckIntervalMs,
+        String interBrokerListenerName
     ) {
         this.nonFatalFaultHandler = nonFatalFaultHandler;
         this.fatalFaultHandler = fatalFaultHandler;
@@ -2112,6 +2190,7 @@ public final class QuorumController implements Controller {
             setKVControlManager(kvControlManager).
             // AutoMQ for Kafka inject end
             setBrokerUncleanShutdownHandler(this::handleUncleanBrokerShutdown).
+            setInterBrokerListenerName(interBrokerListenerName).
             build();
         this.producerIdControlManager = new ProducerIdControlManager.Builder().
             setLogContext(logContext).
@@ -2125,7 +2204,6 @@ public final class QuorumController implements Controller {
             setLogContext(logContext).
             setDefaultReplicationFactor(defaultReplicationFactor).
             setDefaultNumPartitions(defaultNumPartitions).
-            setDefaultMinIsr(defaultMinIsr).
             setEligibleLeaderReplicasEnabled(eligibleLeaderReplicasEnabled).
             setMaxElectionsPerImbalance(ReplicationControlManager.MAX_ELECTIONS_PER_IMBALANCE).
             setConfigurationControl(configurationControl).
@@ -2164,6 +2242,8 @@ public final class QuorumController implements Controller {
         this.zkMigrationEnabled = zkMigrationEnabled;
         this.recordRedactor = new RecordRedactor(configSchema);
         this.eligibleLeaderReplicasEnabled = eligibleLeaderReplicasEnabled;
+        this.uncleanLeaderElectionCheckIntervalNs =
+            TimeUnit.MILLISECONDS.toNanos(uncleanLeaderElectionCheckIntervalMs);
 
         // AutoMQ for Kafka inject start
         this.streamClient = streamClient;
@@ -2459,11 +2539,14 @@ public final class QuorumController implements Controller {
         ControllerRequestContext context,
         BrokerRegistrationRequestData request
     ) {
+        // populate finalized features map with latest known kraft version for validation
+        Map<String, Short> controllerFeatures = new HashMap<>(featureControl.finalizedFeatures(Long.MAX_VALUE).featureMap());
+        controllerFeatures.put(KRaftVersion.FEATURE_NAME, raftClient.kraftVersion().featureLevel());
         return appendWriteEvent("registerBroker", context.deadlineNs(),
             () -> {
                 ControllerResult<BrokerRegistrationReply> result = clusterControl.
-                    registerBroker(request, offsetControl.nextWriteOffset(), featureControl.
-                        finalizedFeatures(Long.MAX_VALUE));
+                    registerBroker(request, offsetControl.nextWriteOffset(),
+                        new FinalizedControllerFeatures(controllerFeatures, Long.MAX_VALUE));
                 rescheduleMaybeFenceStaleBrokers();
                 return result;
             },
@@ -2821,13 +2904,6 @@ public final class QuorumController implements Controller {
     // VisibleForTesting
     QuorumControllerMetrics controllerMetrics() {
         return controllerMetrics;
-    }
-
-    // VisibleForTesting
-    void setNewNextWriteOffset(long newNextWriteOffset) {
-        appendControlEvent("setNewNextWriteOffset", () -> {
-            offsetControl.setNextWriteOffset(newNextWriteOffset);
-        });
     }
 
     void handleUncleanBrokerShutdown(int brokerId, List<ApiMessageAndVersion> records) {

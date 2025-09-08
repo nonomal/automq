@@ -172,6 +172,7 @@ import static org.apache.kafka.metadata.LeaderConstants.NO_LEADER_CHANGE;
  */
 public class ReplicationControlManager {
     static final int MAX_ELECTIONS_PER_IMBALANCE = 1_000;
+    static final int MAX_PARTITIONS_PER_BATCH = 10_000;
 
     static class Builder {
         private SnapshotRegistry snapshotRegistry = null;
@@ -179,7 +180,6 @@ public class ReplicationControlManager {
         private short defaultReplicationFactor = (short) 3;
         private int defaultNumPartitions = 1;
 
-        private int defaultMinIsr = 1;
         private int maxElectionsPerImbalance = MAX_ELECTIONS_PER_IMBALANCE;
         private ConfigurationControlManager configurationControl = null;
         private ClusterControlManager clusterControl = null;
@@ -205,11 +205,6 @@ public class ReplicationControlManager {
 
         Builder setDefaultNumPartitions(int defaultNumPartitions) {
             this.defaultNumPartitions = defaultNumPartitions;
-            return this;
-        }
-
-        Builder setDefaultMinIsr(int defaultMinIsr) {
-            this.defaultMinIsr = defaultMinIsr;
             return this;
         }
 
@@ -265,7 +260,6 @@ public class ReplicationControlManager {
                 logContext,
                 defaultReplicationFactor,
                 defaultNumPartitions,
-                defaultMinIsr,
                 maxElectionsPerImbalance,
                 eligibleLeaderReplicasEnabled,
                 configurationControl,
@@ -342,11 +336,6 @@ public class ReplicationControlManager {
      * not specify a number of partitions.
      */
     private final int defaultNumPartitions;
-
-    /**
-     * The default min ISR that is used if a CreateTopics request does not specify one.
-     */
-    private final int defaultMinIsr;
 
     /**
      * True if eligible leader replicas is enabled.
@@ -476,7 +465,6 @@ public class ReplicationControlManager {
         LogContext logContext,
         short defaultReplicationFactor,
         int defaultNumPartitions,
-        int defaultMinIsr,
         int maxElectionsPerImbalance,
         boolean eligibleLeaderReplicasEnabled,
         ConfigurationControlManager configurationControl,
@@ -489,7 +477,6 @@ public class ReplicationControlManager {
         this.log = logContext.logger(ReplicationControlManager.class);
         this.defaultReplicationFactor = defaultReplicationFactor;
         this.defaultNumPartitions = defaultNumPartitions;
-        this.defaultMinIsr = defaultMinIsr;
         this.maxElectionsPerImbalance = maxElectionsPerImbalance;
         this.eligibleLeaderReplicasEnabled = eligibleLeaderReplicasEnabled;
         this.configurationControl = configurationControl;
@@ -700,6 +687,8 @@ public class ReplicationControlManager {
     ) {
         Map<String, ApiError> topicErrors = new HashMap<>();
         List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
+
+        validateTotalNumberOfPartitions(request, defaultNumPartitions);
 
         // Check the topic names.
         validateNewTopicNames(topicErrors, request.topics(), topicsWithCollisionChars);
@@ -1299,6 +1288,34 @@ public class ReplicationControlManager {
     }
 
     /**
+     * Validates that a batch of topics will create less than {@value MAX_PARTITIONS_PER_BATCH}. Exceeding this number of topics per batch
+     * has led to out-of-memory exceptions. We use this validation to fail earlier to avoid allocating the memory.
+     * Validates an upper bound number of partitions. The actual number may be smaller if some topics are misconfigured.
+     *
+     * @param request a batch of topics to create.
+     * @param defaultNumPartitions default number of partitions to assign if unspecified.
+     * @throws PolicyViolationException if total number of partitions exceeds {@value MAX_PARTITIONS_PER_BATCH}.
+     */
+    static void validateTotalNumberOfPartitions(CreateTopicsRequestData request, int defaultNumPartitions) {
+        int totalPartitions = 0;
+        for (CreatableTopic topic: request.topics()) {
+            if (topic.assignments().isEmpty()) {
+                if (topic.numPartitions() == -1) {
+                    totalPartitions += defaultNumPartitions;
+                } else if (topic.numPartitions() > 0) {
+                    totalPartitions += topic.numPartitions();
+                }
+            } else {
+                totalPartitions += topic.assignments().size();
+            }
+
+        }
+        if (totalPartitions > MAX_PARTITIONS_PER_BATCH) {
+            throw new PolicyViolationException("Excessively large number of partitions per request.");
+        }
+    }
+
+    /**
      * Validate the partition information included in the alter partition request.
      *
      * @param brokerId id of the broker requesting the alter partition
@@ -1544,7 +1561,7 @@ public class ReplicationControlManager {
                 (short) 1));
         }
         generateLeaderAndIsrUpdates("enterControlledShutdown[" + brokerId + "]",
-            brokerId, NO_LEADER, NO_LEADER, records, brokersToIsrs.partitionsWithBrokerInIsr(brokerId), ElasticStreamSwitch.isEnabled());
+            brokerId, NO_LEADER, NO_LEADER, records, brokersToIsrs.partitionsWithBrokerInIsr(brokerId));
     }
 
     /**
@@ -1796,6 +1813,10 @@ public class ReplicationControlManager {
         return !imbalancedPartitions.isEmpty();
     }
 
+    boolean areSomePartitionsLeaderless() {
+        return brokersToIsrs.partitionsWithNoLeader().hasNext();
+    }
+
     /**
      * Attempt to elect a preferred leader for all topic partitions which have a leader that is not the preferred replica.
      *
@@ -1813,12 +1834,17 @@ public class ReplicationControlManager {
         // AutoMQ inject end
 
         List<ApiMessageAndVersion> records = new ArrayList<>();
+        maybeTriggerLeaderChangeForPartitionsWithoutPreferredLeader(records, maxElectionsPerImbalance);
+        return ControllerResult.of(records, records.size() >= maxElectionsPerImbalance);
+    }
 
-        boolean rescheduleImmediately = false;
+    void maybeTriggerLeaderChangeForPartitionsWithoutPreferredLeader(
+        List<ApiMessageAndVersion> records,
+        int maxElections
+    ) {
         for (TopicIdPartition topicPartition : imbalancedPartitions) {
-            if (records.size() >= maxElectionsPerImbalance) {
-                rescheduleImmediately = true;
-                break;
+            if (records.size() >= maxElections) {
+                return;
             }
 
             TopicControlInfo topic = topics.get(topicPartition.topicId());
@@ -1848,8 +1874,52 @@ public class ReplicationControlManager {
                 .setDefaultDirProvider(clusterDescriber)
                 .build().ifPresent(records::add);
         }
+    }
 
-        return ControllerResult.of(records, rescheduleImmediately);
+    /**
+     * Check if we can do an unclean election for partitions with no leader.
+     *
+     * The response() method in the return object is true if this method returned without electing all possible preferred replicas.
+     * The quorum controller should reschedule this operation immediately if it is true.
+     *
+     * @return All of the election records and true if there may be more elections to be done.
+     */
+    ControllerResult<Boolean> maybeElectUncleanLeaders() {
+        List<ApiMessageAndVersion> records = new ArrayList<>();
+        maybeTriggerUncleanLeaderElectionForLeaderlessPartitions(records, maxElectionsPerImbalance);
+        return ControllerResult.of(records, records.size() >= maxElectionsPerImbalance);
+    }
+
+    /**
+     * Trigger unclean leader election for partitions without leader (visiable for testing)
+     *
+     * @param records       The record list to append to.
+     * @param maxElections  The maximum number of elections to perform.
+     */
+    void maybeTriggerUncleanLeaderElectionForLeaderlessPartitions(
+            List<ApiMessageAndVersion> records,
+            int maxElections
+    ) {
+        Iterator<TopicIdPartition> iterator = brokersToIsrs.partitionsWithNoLeader();
+        while (iterator.hasNext() && records.size() < maxElections) {
+            TopicIdPartition topicIdPartition = iterator.next();
+            TopicControlInfo topic = topics.get(topicIdPartition.topicId());
+            if (configurationControl.uncleanLeaderElectionEnabledForTopic(topic.name)) {
+                ApiError result = electLeader(topic.name, topicIdPartition.partitionId(),
+                        ElectionType.UNCLEAN, records);
+                if (result.error().equals(Errors.NONE)) {
+                    log.error("Triggering unclean leader election for offline partition {}-{}.",
+                            topic.name, topicIdPartition.partitionId());
+                } else {
+                    log.warn("Cannot trigger unclean leader election for offline partition {}-{}: {}",
+                            topic.name, topicIdPartition.partitionId(), result.error());
+                }
+            } else if (log.isDebugEnabled()) {
+                log.debug("Cannot trigger unclean leader election for offline partition {}-{} " +
+                                "because unclean leader election is disabled for this topic.",
+                        topic.name, topicIdPartition.partitionId());
+            }
+        }
     }
 
     // AutoMQ inject start
@@ -2076,33 +2146,15 @@ public class ReplicationControlManager {
                                      int brokerWithUncleanShutdown,
                                      List<ApiMessageAndVersion> records,
                                      Iterator<TopicIdPartition> iterator) {
-        generateLeaderAndIsrUpdates(context, brokerToRemove, brokerToAdd, brokerWithUncleanShutdown, records, iterator, false);
+        generateLeaderAndIsrUpdates0(context, brokerToRemove, brokerToAdd, brokerWithUncleanShutdown, records, iterator);
     }
 
-    /**
-     * Iterate over a sequence of partitions and generate ISR changes and/or leader
-     * changes if necessary.
-     *
-     * @param context           A human-readable context string used in log4j logging.
-     * @param brokerToRemove    NO_LEADER if no broker is being removed; the ID of the
-     *                          broker to remove from the ISR and leadership, otherwise.
-     * @param brokerToAdd       NO_LEADER if no broker is being added; the ID of the
-     *                          broker which is now eligible to be a leader, otherwise.
-     * @param records           A list of records which we will append to.
-     * @param iterator          The iterator containing the partitions to examine.
-     * @param fencing           Whether to fence the provided partitions. That is to say,
-     *                          set their leader to {@link org.apache.kafka.metadata.LeaderConstants#NO_LEADER}
-     *                          temporarily. It aims to ensure that the partitions should be firstly closed and
-     *                          then be re-opened. In case that the original broker is out of communication and
-     *                          then fail to touch re-elections, The partitions are scheduled to be re-elected.
-     */
-    void generateLeaderAndIsrUpdates(String context,
+    void generateLeaderAndIsrUpdates0(String context,
                                      int brokerToRemove,
                                      int brokerToAdd,
                                      int brokerWithUncleanShutdown,
                                      List<ApiMessageAndVersion> records,
-                                     Iterator<TopicIdPartition> iterator,
-                                     boolean fencing) {
+                                     Iterator<TopicIdPartition> iterator) {
         int oldSize = records.size();
 
         // If the caller passed a valid broker ID for brokerToAdd, rather than passing
@@ -2119,8 +2171,9 @@ public class ReplicationControlManager {
         // the ISR.
 
         // AutoMQ for Kafka inject start
-        IntPredicate isAcceptableLeader = fencing ? r -> false :
-            r -> (r != brokerToRemove) && (r == brokerToAdd || clusterControl.isActive(r));
+        // We should set up set leader after the partition is opened in the new broker to avoid client fast retry.
+        // When the partition is opened in a new broker, the new broker will try to elect leader for the partition.
+        IntPredicate isAcceptableLeader = n -> false;
 
         BrokerRegistration brokerRegistrationToRemove = clusterControl.brokerRegistrations().get(brokerToRemove);
         PartitionLeaderSelector partitionLeaderSelector = null;
@@ -2170,10 +2223,6 @@ public class ReplicationControlManager {
                     partitionLeaderSelector
                         .select(new TopicPartition(topic.name(), topicIdPart.partitionId()))
                         .ifPresent(builder::setTargetNode);
-                }
-                if (fencing) {
-                    TopicPartition topicPartition = new TopicPartition(topic.name(), topicIdPart.partitionId());
-                    addPartitionToReElectTimeouts(topicPartition);
                 }
             } else {
                 builder.setTargetIsr(Replicas.toList(
@@ -2494,14 +2543,8 @@ public class ReplicationControlManager {
 
     // Visible to test.
     int getTopicEffectiveMinIsr(String topicName) {
-        int currentMinIsr = defaultMinIsr;
-        String minIsrConfig = configurationControl.getTopicConfig(topicName, MIN_IN_SYNC_REPLICAS_CONFIG);
-        if (minIsrConfig != null) {
-            currentMinIsr = Integer.parseInt(minIsrConfig);
-        } else {
-            log.debug("Can't find the min isr config for topic: " + topicName + ". Use default value " + defaultMinIsr);
-        }
-
+        String minIsrConfig = configurationControl.getTopicConfig(topicName, MIN_IN_SYNC_REPLICAS_CONFIG).value();
+        int currentMinIsr = Integer.parseInt(minIsrConfig);
         Uuid topicId = topicsByName.get(topicName);
         int replicationFactor = topics.get(topicId).parts.get(0).replicas.length;
         return Math.min(currentMinIsr, replicationFactor);

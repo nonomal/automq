@@ -140,7 +140,7 @@ object Partition {
     new Partition(topicPartition,
       _topicId = topicId,
       replicaLagTimeMaxMs = replicaManager.config.replicaLagTimeMaxMs,
-      interBrokerProtocolVersion = replicaManager.config.interBrokerProtocolVersion,
+      interBrokerProtocolVersion = replicaManager.metadataCache.metadataVersion(),
       localBrokerId = replicaManager.config.brokerId,
       localBrokerEpochSupplier = replicaManager.brokerEpochSupplier,
       time = time,
@@ -2367,7 +2367,11 @@ class Partition(val topicPartition: TopicPartition,
       leaderEpoch = snapshot.leaderEpoch
       val log = this.log.get.asInstanceOf[ElasticUnifiedLog]
       log.snapshot(snapshot)
-      handleLeaderConfirmOffsetMove()
+      log.getLocalLog().appendAckThread.submit(() => {
+        // async it to avoid deadlock
+        tryCompleteDelayedRequests()
+        null
+      });
     }
   }
   // AutoMQ injection end

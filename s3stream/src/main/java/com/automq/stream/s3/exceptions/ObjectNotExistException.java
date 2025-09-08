@@ -32,8 +32,10 @@ public class ObjectNotExistException extends AutoMQException {
         super(msg);
     }
 
+    @SuppressWarnings("this-escape")
     public ObjectNotExistException(Throwable cause) {
-        super(cause.getMessage(), cause);
+        super(cause.getMessage());
+        this.addSuppressed(cause);
     }
 
 }
