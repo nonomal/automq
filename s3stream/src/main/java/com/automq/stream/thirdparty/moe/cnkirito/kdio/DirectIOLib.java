@@ -43,6 +43,15 @@ import io.netty.util.internal.PlatformDependent;
  * when given a string for a file or directory.
  */
 public class DirectIOLib {
+    public static final String IGNORE_PATH_CONF_SIZE_PROPERTY = "automq.path.conf.size";
+    public static final int IGNORE_PATH_CONF_SIZE = Integer.parseInt(System.getProperty(
+        IGNORE_PATH_CONF_SIZE_PROPERTY, "0"
+    ));
+    public static final String IGNORE_PAGE_SIZE_PROPERTY = "automq.page.size";
+    public static final int IGNORE_PAGE_SIZE = Integer.parseInt(System.getProperty(
+        IGNORE_PAGE_SIZE_PROPERTY, "0"
+    ));
+
     static final int PC_REC_XFER_ALIGN = 0x11;
     private static final Logger LOGGER = LoggerFactory.getLogger(DirectIOLib.class);
     public static boolean binit;
@@ -131,8 +140,14 @@ public class DirectIOLib {
         if (binit) {
             // get file system block size for use with workingDir
             // see "man 3 posix_memalign" for why we do this
-            fsBlockSize = pathconf(fileOrDir, PC_REC_XFER_ALIGN);
-            System.out.println("[dio] posix_memalign: " + fsBlockSize);
+            if (IGNORE_PATH_CONF_SIZE != 0) {
+                fsBlockSize = IGNORE_PATH_CONF_SIZE;
+                System.out.println("[dio] ignore: pathconf(fileOrDir, PC_REC_XFER_ALIGN), fsBlockSize:" + fsBlockSize);
+            } else {
+                fsBlockSize = pathconf(fileOrDir, PC_REC_XFER_ALIGN);
+                System.out.println("[dio] posix_memalign: " + fsBlockSize);
+            }
+
             /* conservative for version >= 2.6
              * "man 2 open":
              *
@@ -143,9 +158,14 @@ public class DirectIOLib {
             // Since O_DIRECT requires pages to be memory aligned with the file system block size,
             // we will do this too in case the page size and the block size are different for
             // whatever reason. By taking the least common multiple, everything should be happy:
-            int pageSize = getpagesize();
-            System.out.println("[dio] pageSize: " + pageSize);
-            fsBlockSize = lcm(fsBlockSize, pageSize);
+            if (IGNORE_PAGE_SIZE != 0) {
+                System.out.println("[dio] ignore: getpagesize(), pageSize:" + IGNORE_PAGE_SIZE);
+                fsBlockSize = lcm(fsBlockSize, IGNORE_PAGE_SIZE);
+            } else {
+                int pageSize = getpagesize();
+                System.out.println("[dio] pageSize: " + pageSize);
+                fsBlockSize = lcm(fsBlockSize, pageSize);
+            }
 
             // just being completely paranoid:
             // (512 is the rule for 2.6+ kernels as mentioned before)
