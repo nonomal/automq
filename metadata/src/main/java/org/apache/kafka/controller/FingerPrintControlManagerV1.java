@@ -1,8 +1,10 @@
 package org.apache.kafka.controller;
 
+import org.apache.kafka.common.Reconfigurable;
+
 import java.util.Map;
 
-public interface FingerPrintControlManagerV1  {
+public interface FingerPrintControlManagerV1  extends Reconfigurable {
     String installId();
 
     void checkLicense(Map<String, String> configs, String installId);
