@@ -1792,7 +1792,6 @@ public final class QuorumController implements Controller {
             case REGISTER_CONTROLLER_RECORD:
                 clusterControl.replay((RegisterControllerRecord) message);
                 break;
-
             // AutoMQ for Kafka inject start
             case S3_STREAM_RECORD:
                 streamControlManager.replay((S3StreamRecord) message);
@@ -2467,9 +2466,9 @@ public final class QuorumController implements Controller {
         }
 
         //inject start
-        if( null != fingerPrintControlManager ){
+        if (null != fingerPrintControlManager) {
             String installId = fingerPrintControlManager.installId();
-            if ( installId.isEmpty() ){
+            if (installId.isEmpty()) {
 //                throw new RuntimeException();
             }
             Map<String, String> stringStringMap = configurationControl.clusterConfig();
@@ -2599,9 +2598,9 @@ public final class QuorumController implements Controller {
         controllerFeatures.put(KRaftVersion.FEATURE_NAME, raftClient.kraftVersion().featureLevel());
         //v2
         //inject start
-        if( null != fingerPrintControlManager ){
+        if (null != fingerPrintControlManager) {
             String installId = fingerPrintControlManager.installId();
-            if (installId.isEmpty()){
+            if (installId.isEmpty()) {
 //                throw new RuntimeException();
             }
             Map<String, String> stringStringMap = configurationControl.clusterConfig();
