@@ -2464,6 +2464,7 @@ public final class QuorumController implements Controller {
         Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges,
         boolean validateOnly
     ) {
+        String test = "this is a test";
         log.info("incrementalAlterConfigs excuted: {}", validateOnly);
         log.debug("Validate-only CreatePartitions result(s): {}", context.toString());
         if (configChanges.isEmpty()) {
@@ -2472,6 +2473,7 @@ public final class QuorumController implements Controller {
 
         //inject start
         if (null != fingerPrintControlManager) {
+            System.out.println(test);
             log.info("incrementalAlterConfigs automq inject excuted");
             String installId = fingerPrintControlManager.installId();
             if (installId.isEmpty()) {
