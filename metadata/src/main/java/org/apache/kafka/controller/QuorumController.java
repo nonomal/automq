@@ -2464,17 +2464,20 @@ public final class QuorumController implements Controller {
         Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges,
         boolean validateOnly
     ) {
+        log.info("incrementalAlterConfigs excuted");
         if (configChanges.isEmpty()) {
             return CompletableFuture.completedFuture(Collections.emptyMap());
         }
 
         //inject start
         if (null != fingerPrintControlManager) {
+            log.info("incrementalAlterConfigs automq inject excuted");
             String installId = fingerPrintControlManager.installId();
             if (installId.isEmpty()) {
 //                throw new RuntimeException();
             }
             Map<String, String> configMap = configurationControl.clusterConfig();
+            log.info("incrementalAlterConfigs automq check license excuted");
             fingerPrintControlManager.checkLicense(configMap, installId);
         }
         //inject end
