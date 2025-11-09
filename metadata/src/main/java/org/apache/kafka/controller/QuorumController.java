@@ -2117,7 +2117,7 @@ public final class QuorumController implements Controller {
 //        QuorumController.class.getClassLoader()
 //    );
 
-    private final FingerPrintControlManagerV1 fingerPrintControlManager = loadFingerPrintControlManager();
+    private final FingerPrintControlManagerV1 fingerPrintControlManager;
     // AutoMQ for Kafka inject end
 
 
@@ -2304,10 +2304,13 @@ public final class QuorumController implements Controller {
         this.nodeControlManager = new NodeControlManager(snapshotRegistry, new DefaultNodeRuntimeInfoManager(clusterControl, streamControlManager));
         this.routerChannelEpochControlManager = new RouterChannelEpochControlManager(snapshotRegistry, this, nodeControlManager, time);
         this.extension = extension.apply(this);
+        this.fingerPrintControlManager = loadFingerPrintControlManager();
+
 //        this.fingerPrintControlManager = QuorumControllerExtension.loadService(
 //            FingerPrintControlManagerV1.class,
 //            QuorumController.class.getClassLoader()
 //        );
+
 
         // set the nodeControlManager here to avoid circular dependency
         this.replicationControl.setNodeControlManager(nodeControlManager);

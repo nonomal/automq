@@ -51,6 +51,7 @@ public interface QuorumControllerExtension {
             }
         } catch (Throwable ignore) {
             // Ignore any exceptions during service loading
+            log.warn("Failed to load service: {}", serviceClass, ignore);
         }
         log.warn("No service implementation found for class: {}", serviceClass);
         return null;
