@@ -205,6 +205,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -2111,15 +2112,29 @@ public final class QuorumController implements Controller {
 
     private final QuorumControllerExtension extension;
 //nick
-    private final FingerPrintControlManagerV1 fingerPrintControlManager = QuorumControllerExtension.loadService(
-        FingerPrintControlManagerV1.class,
-        QuorumController.class.getClassLoader()
-    );
+//    private final FingerPrintControlManagerV1 fingerPrintControlManager = QuorumControllerExtension.loadService(
+//        FingerPrintControlManagerV1.class,
+//        QuorumController.class.getClassLoader()
+//    );
 
-//    private final FingerPrintControlManagerV1 fingerPrintControlManager = loadFingerPrintControlManager();
+    private final FingerPrintControlManagerV1 fingerPrintControlManager = loadFingerPrintControlManager();
     // AutoMQ for Kafka inject end
 
 
+    private FingerPrintControlManagerV1 loadFingerPrintControlManager() {
+        try {
+            log.info("loadFingerPrintControlManager excuted");
+            ServiceLoader<FingerPrintControlManagerV1> loader =
+                ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
+            for (FingerPrintControlManagerV1 impl : loader) {
+                log.info("FingerPrintControlManagerV1 successful loaded : " + impl.getClass().getName());
+                return impl;
+            }
+        } catch (Throwable ignore) {
+            log.info("loadFingerPrintControlManager error");
+        }
+        return null;
+    }
     private QuorumController(
         FaultHandler nonFatalFaultHandler,
         FaultHandler fatalFaultHandler,
