@@ -2474,6 +2474,7 @@ public final class QuorumController implements Controller {
             log.info("incrementalAlterConfigs automq inject excuted");
             String installId = fingerPrintControlManager.installId();
             if (installId.isEmpty()) {
+                log.info("installId in incrementalAlterConfigs got null");
 //                throw new RuntimeException();
             }
             Map<String, String> configMap = configurationControl.clusterConfig();
@@ -2599,6 +2600,7 @@ public final class QuorumController implements Controller {
         ControllerRequestContext context,
         BrokerRegistrationRequestData request
     ) {
+        log.info("QuorumController#registerBroker excuted");
         // populate finalized features map with latest known kraft version for validation
         Map<String, Short> controllerFeatures = new HashMap<>(featureControl.finalizedFeatures(Long.MAX_VALUE).featureMap());
         controllerFeatures.put(KRaftVersion.FEATURE_NAME, raftClient.kraftVersion().featureLevel());
