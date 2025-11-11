@@ -466,9 +466,16 @@ class ElasticKafkaApis(
   }
 
   override def handleFetchRequest(request: RequestChannel.Request): Unit = {
+    logger.info("handleFetchRequest executed")
     val versionId = request.header.apiVersion
     val clientId = request.header.clientId
     val fetchRequest = request.body[FetchRequest]
+    // If broker-level consumer fetch is disabled, reject client (non-follower) fetch requests.
+    if (!fetchRequest.isFromFollower && quotas.broker.isFetchDisabled) {
+      logger.info("Consumer is not allowed to fetch data due to license!");
+      requestHelper.sendMaybeThrottle(request, fetchRequest.getErrorResponse(Errors.POLICY_VIOLATION.exception))
+      return
+    }
     val topicNames =
       if (fetchRequest.version() >= 13)
         metadataCache.topicIdsToNames()
