@@ -25,35 +25,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
-import java.util.ServiceLoader;
 
 public interface QuorumControllerExtension {
     QuorumControllerExtension NOOP = (type, message, snapshotId, batchLastOffset) -> false;
     Logger log = LoggerFactory.getLogger(QuorumControllerExtension.class);
 
     boolean replay(MetadataRecordType type, ApiMessage message, Optional<OffsetAndEpoch> snapshotId, long batchLastOffset);
-
-    /**
-     * Loads a service implementation using ServiceLoader.
-     * Returns the first available implementation, or null if none is found.
-     *
-     * @param serviceClass the service interface or class to load
-     * @param classLoader the class loader to use for loading the service
-     * @param <T> the type of service to load
-     * @return the first available service implementation, or null if none is found
-     */
-    static <T> T loadService(Class<T> serviceClass, ClassLoader classLoader) {
-        try {
-            ServiceLoader<T> loader = ServiceLoader.load(serviceClass, classLoader);
-            for (T impl : loader) {
-                log.info("Loaded service: {}", impl);
-                return impl;
-            }
-        } catch (Throwable ignore) {
-            // Ignore any exceptions during service loading
-            log.warn("Failed to load service: {}", serviceClass, ignore);
-        }
-        log.warn("No service implementation found for class: {}", serviceClass);
-        return null;
-    }
 }

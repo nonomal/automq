@@ -22,7 +22,6 @@ package kafka.automq.controller;
 import kafka.automq.failover.FailoverControlManager;
 import kafka.server.streamaspect.FingerPrintControlManagerProvider;
 
-import org.apache.kafka.common.metadata.ConfigRecord;
 import org.apache.kafka.common.metadata.KVRecord;
 import org.apache.kafka.common.metadata.MetadataRecordType;
 import org.apache.kafka.common.protocol.ApiMessage;
@@ -56,8 +55,10 @@ public class DefaultQuorumControllerExtension implements QuorumControllerExtensi
         long batchLastOffset) {
         if (Objects.requireNonNull(type) == MetadataRecordType.KVRECORD) {
             failoverControlManager.replay((KVRecord) message);
-        } else if (Objects.requireNonNull(type) == MetadataRecordType.CONFIG_RECORD && fingerPrintControlManager != null) {
-            fingerPrintControlManager.replayLicenseConfig((ConfigRecord) message);
+            if (fingerPrintControlManager != null) {
+                log.info("Fingerprint control manager replayed,ft");
+                fingerPrintControlManager.replay((KVRecord) message);
+            }
         } else {
             return false;
         }
