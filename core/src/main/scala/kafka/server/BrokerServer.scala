@@ -202,7 +202,9 @@ class BrokerServer(
 
   override def startup(): Unit = {
     if (!maybeChangeStatus(SHUTDOWN, STARTING)) return
+    info("checking cluster nodes count..")
     if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) return
+    info("nodes count check passed,broker starting...")
     val startupDeadline = Deadline.fromDelay(time, config.serverMaxStartupTimeMs, TimeUnit.MILLISECONDS)
     try {
       sharedServer.startForBroker()
