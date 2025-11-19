@@ -468,7 +468,7 @@ class ElasticKafkaApis(
   }
 
   override def handleFetchRequest(request: RequestChannel.Request): Unit = {
-    logger.info("handleFetchRequest executed")
+//    logger.info("handleFetchRequest executed")
     val versionId = request.header.apiVersion
     val clientId = request.header.clientId
     val fetchRequest = request.body[FetchRequest]
